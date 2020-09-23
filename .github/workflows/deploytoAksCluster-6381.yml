@@ -1,0 +1,64 @@
+on: [push]
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    
+    - uses: actions/checkout@master
+    
+    - uses: azure/login@v1
+      with:
+        creds: ${{secrets.AZURE_CREDENTIALS_GITHUB_SECRET}}
+
+    - name: Create ACR
+      id: create-acr
+      run: |
+        az acr create -n bugbash2392020acr1 -g bugbash2392020acr1980d-rg --location "South Central US" --sku Basic --admin-enabled
+        echo "::set-output name=acr_username::`az acr credential show -n bugbash2392020acr1 --query username | xargs`"
+        echo "::set-output name=acr_password::`az acr credential show -n bugbash2392020acr1 --query passwords[0].value | xargs`"
+        echo "::add-mask::`az acr credential show -n bugbash2392020acr1 --query passwords[0].value | xargs`"
+
+    - uses: azure/docker-login@v1
+      with:
+        login-server: bugbash2392020acr1.azurecr.io
+        username: ${{steps.create-acr.outputs.acr_username}}
+        password: ${{steps.create-acr.outputs.acr_password}}
+
+    - name: Build and push image to ACR
+      id: build-image
+      run: |
+        docker build "$GITHUB_WORKSPACE/." -f  "Dockerfile" -t bugbash2392020acr1.azurecr.io/bugbash239202036e4:${{github.sha}}
+        docker push bugbash2392020acr1.azurecr.io/bugbash239202036e4:${{github.sha}}
+    
+    - uses: azure/k8s-set-context@v1
+      id: login
+      with:
+         kubeconfig: ${{secrets.aks_bugbash2392020_kubeConfig}}
+    
+    - name: Create namespace
+      run: |
+        namespacePresent=`kubectl get namespace | grep bugbash2392020666b | wc -l`
+        if [ $namespacePresent -eq 0 ]
+        then
+            echo `kubectl create namespace bugbash2392020666b`
+        fi
+
+    - uses: azure/k8s-create-secret@v1
+      with:
+        namespace: bugbash2392020666b
+        container-registry-url: bugbash2392020acr1.azurecr.io
+        container-registry-username: ${{steps.create-acr.outputs.acr_username}}
+        container-registry-password: ${{steps.create-acr.outputs.acr_password}}
+        secret-name: bugbash23920dockerauth
+       
+    - uses: azure/k8s-deploy@v1
+      with:
+        namespace: bugbash2392020666b
+        manifests: |
+          manifests/deployment-6381.yml
+          manifests/service-6381.yml
+          manifests/ingress-6381.yml
+        images: |
+          bugbash2392020acr1.azurecr.io/bugbash239202036e4:${{github.sha}}
+        imagepullsecrets: |
+          bugbash23920dockerauth
